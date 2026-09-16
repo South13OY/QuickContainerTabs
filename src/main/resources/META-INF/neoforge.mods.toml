@@ -1,0 +1,41 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+credits="South13OY"
+description='''
+便捷容器标签 (Quick Container Tabs) - 容器快速切换标签页 Mod (Minecraft 1.21.1 / NeoForge)
+
+在背包、箱子和各类工作方块界面上下侧添加可点击的标签页，罗列玩家周围可交互的容器与工作方块，
+点击即可直接切换打开对应界面，省去"关界面 -> 走过去点方块"的繁琐流程。
+
+特性：
+- 上方标签页：周围容器类方块（箱子、木桶、熔炉、潜影盒、漏斗、发射器等）
+- 下方标签页：周围工作方块类（工作台、铁砧、附魔台、锻造台、切石机、织布机等）
+- 上下两侧独立翻页按钮
+- 鼠标悬停显示名称标签
+- 可为每个容器单独设置图标（界面右侧图标槽，只读展示，物品仍保留在背包）
+- 扫描半径、每页数量等可在 config 调整
+'''
+
+[[dependencies.qct]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1.0,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.qct]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1,1.22)"
+    ordering="NONE"
+    side="BOTH"
+
+[[mixins]]
+    config="qct.mixins.json"

@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+out/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+bin/
+.eclipse/
+
+# Run / 开发运行数据
+run/
+captures/
+hs_err_pid*
+
+# 日志
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
