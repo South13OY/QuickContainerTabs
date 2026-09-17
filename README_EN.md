@@ -1,4 +1,4 @@
-> 🌐 Language: 中文 | [中文](README.md)
+> 🌐 Language:[中文](README.md)
 
 # Quick Container Tabs
 
