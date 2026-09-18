@@ -1,60 +1,65 @@
-package com.south13oy.qct.icon;
+package com.south13oy.qct.server;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mojang.logging.LogUtils;
 import com.mojang.serialization.JsonOps;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.RegistryOps;
-import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
 import net.neoforged.fml.loading.FMLPaths;
 import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
- * 容器自定义图标存储。
- * 持久化到 config/qct_icons.json
+ * 服务端权威图标存储（全服同步）。
  * key = "维度: x,y,z" -> ItemStack
+ * 持久化到 config/qct_icons_server.json。
+ * 仅服务端逻辑可调用（不依赖 Minecraft 客户端类）。
+ * <p>单机升级迁移：server 文件不存在时，尝试读取旧版客户端本地图标文件
+ * （config/qct_icons.json）作为初始数据，并立即落盘为权威文件。
  */
-public class IconStore {
+public class ServerIconStore {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
     private static final Map<String, ItemStack> ICONS = new HashMap<>();
     private static boolean loaded = false;
 
-    private static Path file() {
-        return FMLPaths.CONFIGDIR.get().resolve("qct_icons.json");
+    private ServerIconStore() {
     }
 
-    private static String key(ResourceKey<Level> dim, BlockPos pos) {
-        return dim.location() + ":" + pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    private static Path serverFile() {
+        return FMLPaths.CONFIGDIR.get().resolve("qct_icons_server.json");
     }
 
-    private static void ensureLoaded(Minecraft mc) {
+    private static String key(ResourceLocation dim, BlockPos pos) {
+        return dim + ":" + pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    }
+
+    private static void ensureLoaded(RegistryAccess access) {
         if (loaded) return;
         loaded = true;
-        if (mc == null) return;
-        Path f = file();
+        Path f = serverFile();
+        if (!Files.exists(f)) {
+            // 旧版客户端本地图标文件 -> 迁移为服务端权威数据
+            Path legacy = FMLPaths.CONFIGDIR.get().resolve("qct_icons.json");
+            if (Files.exists(legacy)) f = legacy;
+        }
         if (!Files.exists(f)) return;
         try {
             String text = Files.readString(f, StandardCharsets.UTF_8);
             JsonObject root = GSON.fromJson(text, JsonObject.class);
             if (root == null) return;
-            RegistryAccess access = mc.level != null ? mc.level.registryAccess() : null;
-            if (access == null) return;
             for (Map.Entry<String, JsonElement> e : root.entrySet()) {
                 try {
                     ItemStack stack = ItemStack.OPTIONAL_CODEC.parse(
@@ -64,18 +69,17 @@ public class IconStore {
                         ICONS.put(e.getKey(), stack);
                     }
                 } catch (Exception ex) {
-                    LOGGER.warn("Skip invalid icon {}: {}", e.getKey(), ex.toString());
+                    LOGGER.warn("Skip invalid server icon {}: {}", e.getKey(), ex.toString());
                 }
             }
+            // 若从旧文件迁移，立即落盘为新权威文件
+            if (f != serverFile()) save(access);
         } catch (IOException ex) {
-            LOGGER.warn("Failed to load icons: {}", ex.toString());
+            LOGGER.warn("Failed to load server icons: {}", ex.toString());
         }
     }
 
-    private static void save(Minecraft mc) {
-        if (mc == null) return;
-        RegistryAccess access = mc.level != null ? mc.level.registryAccess() : null;
-        if (access == null) return;
+    private static void save(RegistryAccess access) {
         JsonObject root = new JsonObject();
         for (Map.Entry<String, ItemStack> e : ICONS.entrySet()) {
             if (e.getValue() == null || e.getValue().isEmpty()) continue;
@@ -85,54 +89,36 @@ public class IconStore {
                         .result().orElse(null);
                 if (je != null) root.add(e.getKey(), je);
             } catch (Exception ex) {
-                LOGGER.warn("Failed to save icon {}: {}", e.getKey(), ex.toString());
+                LOGGER.warn("Failed to save server icon {}: {}", e.getKey(), ex.toString());
             }
         }
         try {
-            Path f = file();
-            Files.writeString(f, GSON.toJson(root), StandardCharsets.UTF_8);
+            Files.writeString(serverFile(), GSON.toJson(root), StandardCharsets.UTF_8);
         } catch (IOException ex) {
-            LOGGER.warn("Failed to write icons: {}", ex.toString());
+            LOGGER.warn("Failed to write server icons: {}", ex.toString());
         }
     }
 
-    /** 获取图标；无则返回 EMPTY。 */
-    public static ItemStack getIcon(Minecraft mc, ResourceKey<Level> dim, BlockPos pos) {
-        ensureLoaded(mc);
+    /** 查询图标；无则返回 EMPTY。 */
+    public static ItemStack getIcon(RegistryAccess access, ResourceLocation dim, BlockPos pos) {
+        ensureLoaded(access);
         return ICONS.getOrDefault(key(dim, pos), ItemStack.EMPTY);
     }
 
-    /** 设置图标；传入 EMPTY 即清除。 */
-    public static void setIcon(Minecraft mc, ResourceKey<Level> dim, BlockPos pos, ItemStack stack) {
-        ensureLoaded(mc);
+    /** 设置图标（EMPTY 即清除），立即落盘。 */
+    public static void setIcon(RegistryAccess access, ResourceLocation dim, BlockPos pos, ItemStack stack) {
+        ensureLoaded(access);
         if (stack == null || stack.isEmpty()) {
             ICONS.remove(key(dim, pos));
         } else {
             ICONS.put(key(dim, pos), stack.copyWithCount(1));
         }
-        save(mc);
+        save(access);
     }
 
-    public static void clearCache() {
-        loaded = false;
-        ICONS.clear();
-    }
-
-    /** 服务端同步单条数据（维度 + 坐标 + 物品）。 */
-    public record ServerEntry(ResourceKey<Level> dim, BlockPos pos, ItemStack stack) {
-    }
-
-    /** 服务端同步入口：逐条合并进本地缓存并一次性落盘（EMPTY 即清除）。 */
-    public static void applyServerSync(Minecraft mc, List<ServerEntry> entries) {
-        ensureLoaded(mc);
-        for (ServerEntry e : entries) {
-            String k = key(e.dim(), e.pos());
-            if (e.stack() == null || e.stack().isEmpty()) {
-                ICONS.remove(k);
-            } else {
-                ICONS.put(k, e.stack().copyWithCount(1));
-            }
-        }
-        save(mc);
+    /** 全量读取（登录同步用）。 */
+    public static Map<String, ItemStack> getAll(RegistryAccess access) {
+        ensureLoaded(access);
+        return new HashMap<>(ICONS);
     }
 }
