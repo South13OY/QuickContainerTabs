@@ -35,7 +35,8 @@ import java.util.Set;
 public class SideConfigScreen extends Screen {
 
     private static final int ROW_H = 26;
-    private static final int LIST_TOP = 38;
+    /** 列表区顶部 Y：标题(10) + 副标题(24) + 搜索框行(40~58) 之后。 */
+    private static final int LIST_TOP = 68;
     private static final int BTN_ARROW_W = 22;
     private static final int BTN_ARROW_H = 18;
     private static final int BTN_PRI_W = 46;
@@ -46,6 +47,10 @@ public class SideConfigScreen extends Screen {
     private static final int BTN_RESET_H = 22;
     /** 底部三行（扫描距离 / + / 操作栏）统一高度。 */
     private static final int BOTTOM_ROW_H = 22;
+    /** 搜索框高度。 */
+    private static final int SEARCH_H = 18;
+    /** 右侧滚动条宽度。 */
+    private static final int SCROLLBAR_W = 4;
 
     private final Screen previousScreen;
 
@@ -66,6 +71,13 @@ public class SideConfigScreen extends Screen {
     }
 
     private final List<TypeEntry> entries = new ArrayList<>();
+    /** 搜索过滤后的可见列表（渲染/点击/滚动均基于它；底层操作仍以 regId 定位原始项）。 */
+    private final List<TypeEntry> filtered = new ArrayList<>();
+    private String searchText = "";
+    /** 顶部搜索框：支持译名与注册ID（不区分大小写，包含匹配）。 */
+    private EditBox searchInput;
+    /** 右侧滚动条拖动状态。 */
+    private boolean scrollDragging = false;
     private int scrollY = 0;
     private String feedback = "";
 
@@ -97,6 +109,15 @@ public class SideConfigScreen extends Screen {
         this.radiusInput.setValue(Integer.toString(ModConfig.VALUES.scanRadius.get()));
         this.radiusInput.setFilter(s -> s.matches("\\d{0,2}"));
         this.radiusInput.setVisible(false);
+        // 顶部搜索框：按译名或注册ID过滤列表（实时重建过滤视图，并复位到第一页）
+        this.searchInput = new EditBox(this.font, 16, 40, Math.min(240, width - 200), SEARCH_H,
+                Component.literal("搜索容器/工作方块（译名或注册ID）"));
+        this.searchInput.setMaxLength(64);
+        this.searchInput.setResponder(s -> {
+            searchText = s == null ? "" : s.trim().toLowerCase();
+            buildFiltered();
+            scrollY = 0;
+        });
         // 进入编辑会话：此后所有修改仅存内存，直到“保存并退出”才落盘
         SideStore.beginSession();
         buildEntries();
@@ -199,6 +220,23 @@ public class SideConfigScreen extends Screen {
                 .comparingInt((TypeEntry e) -> effectiveTop(e) ? 0 : 1)
                 .thenComparingInt(e -> SideStore.getPriority(e.regId))
                 .thenComparing(e -> e.regId));
+        // 列表内容变化后同步刷新搜索过滤视图
+        buildFiltered();
+    }
+
+    /** 按当前搜索文本重建可见列表：匹配译名（name）或注册ID（regId），不区分大小写、包含即中。 */
+    private void buildFiltered() {
+        filtered.clear();
+        if (searchText.isEmpty()) {
+            filtered.addAll(entries);
+            return;
+        }
+        for (TypeEntry te : entries) {
+            if (te.regId.toLowerCase().contains(searchText)
+                    || te.name.getString().toLowerCase().contains(searchText)) {
+                filtered.add(te);
+            }
+        }
     }
 
     private boolean effectiveTop(TypeEntry te) {
@@ -226,23 +264,44 @@ public class SideConfigScreen extends Screen {
             gg.drawString(font, feedback, 16, height - 126, 0xFFFFC000);
         }
 
+        // 顶部搜索框：译名 / 注册ID 实时过滤（空内容时框内显示浅色占位提示）
+        searchInput.setX(16);
+        searchInput.setY(40);
+        searchInput.setWidth(Math.min(240, width - 200));
+        searchInput.render(gg, mouseX, mouseY, partialTick);
+        if (searchInput.getValue().isEmpty()) {
+            gg.drawString(font, "搜索容器/工作方块（译名或注册ID）",
+                    searchInput.getX() + 5,
+                    searchInput.getY() + (SEARCH_H - font.lineHeight) / 2,
+                    0xFF6E6E6E);
+        }
+
         int viewH = viewportHeight();
-        int contentH = entries.size() * ROW_H;
+        int contentH = filtered.size() * ROW_H;
         int maxS = Math.max(0, contentH - viewH);
         scrollY = Math.max(0, Math.min(scrollY, maxS));
 
         int first = scrollY / ROW_H;
-        int last = Math.min(entries.size(), (scrollY + viewH + ROW_H - 1) / ROW_H + 1);
-        for (int i = first; i < entries.size() && i < last; i++) {
+        int last = Math.min(filtered.size(), (scrollY + viewH + ROW_H - 1) / ROW_H + 1);
+        for (int i = first; i < filtered.size() && i < last; i++) {
             int y = LIST_TOP + i * ROW_H - scrollY;
             if (y + ROW_H < LIST_TOP || y > LIST_TOP + viewH) continue;
-            renderRow(gg, entries.get(i), y, mouseX, mouseY);
+            renderRow(gg, filtered.get(i), y, mouseX, mouseY);
+        }
+
+        // 右侧滚动条（仅内容超出一屏时显示）：轨道 + 按当前位置比例缩放的滑块
+        if (maxS > 0) {
+            drawScrollbar(gg, viewH, maxS, mouseX, mouseY);
         }
 
         // 底部“+”按钮（与行等宽）；下方留出“扫描距离”行与操作栏的空间
         int plusY = plusY();
-        if (entries.isEmpty()) {
-            gg.drawString(font, "未发现可扫描的容器/工作方块类型", 16, LIST_TOP + 4, 0x9A9A9A);
+        if (filtered.isEmpty()) {
+            if (searchText.isEmpty()) {
+                gg.drawString(font, "未发现可扫描的容器/工作方块类型", 16, LIST_TOP + 4, 0x9A9A9A);
+            } else {
+                gg.drawString(font, "未找到匹配“" + searchText + "”的容器/工作方块类型", 16, LIST_TOP + 4, 0x9A9A9A);
+            }
         }
         boolean plusHover = hit(mouseX, mouseY, 16, plusY, width - 32, 22);
         fillBox(gg, 16, plusY, width - 32, 22, addingMode, plusHover);
@@ -313,9 +372,9 @@ public class SideConfigScreen extends Screen {
         return Math.max(0, height - LIST_TOP - 108);
     }
 
-    /** 最右侧“重置”按钮的 X（位于 X 删除按钮右侧）。 */
+    /** 最右侧“重置”按钮的 X（位于 X 删除按钮右侧；整体左移 12px 为滚动条让位）。 */
     private int resetX() {
-        return width - 48;
+        return width - 60;
     }
 
     /** X 删除按钮的 X（位于重置左侧）。 */
@@ -398,6 +457,24 @@ public class SideConfigScreen extends Screen {
         gg.fill(x, y + h - 1, x + w, y + h, border);
     }
 
+    /** 右侧滚动条：轨道固定、滑块高度按视口/内容比例，位置映射当前 scrollY。 */
+    private void drawScrollbar(GuiGraphics gg, int viewH, int maxS, int mouseX, int mouseY) {
+        int sbX = scrollbarX();
+        int trackH = viewH;
+        int thumbH = Math.max(18, trackH * trackH / Math.max(1, trackH + maxS));
+        int thumbY = LIST_TOP + (int) ((long) scrollY * (trackH - thumbH) / maxS);
+        boolean hover = mouseX >= sbX && mouseX < sbX + SCROLLBAR_W
+                && mouseY >= LIST_TOP && mouseY < LIST_TOP + trackH;
+        gg.fill(sbX, LIST_TOP, sbX + SCROLLBAR_W, LIST_TOP + trackH, 0xFF1E1E1E);
+        gg.fill(sbX, thumbY, sbX + SCROLLBAR_W, thumbY + thumbH,
+                scrollDragging ? 0xFFE0E0E0 : (hover ? 0xFFA0A0A0 : 0xFF707070));
+    }
+
+    /** 滚动条轨道 X：屏幕最右侧，与行内按钮列（至 width-20）无重叠。 */
+    private int scrollbarX() {
+        return width - 14;
+    }
+
     private static boolean hit(double mx, double my, int x, int y, int w, int h) {
         return mx >= x && mx < x + w && my >= y && my < y + h;
     }
@@ -410,19 +487,42 @@ public class SideConfigScreen extends Screen {
         if (input != null && input.isVisible() && input.mouseClicked(mouseX, mouseY, button)) {
             return true;
         }
+        // 搜索框：显式设置焦点（不依赖 EditBox 内部 mouseClicked 的返回值），
+        // 同时确保其它输入框失焦，避免焦点状态异常导致后续按键事件被吞、无法输入。
+        if (searchInput != null && searchInput.isVisible()
+                && hit(mouseX, mouseY, searchInput.getX(), searchInput.getY(),
+                        searchInput.getWidth(), searchInput.getHeight())) {
+            searchInput.setFocused(true);
+            if (input != null) input.setFocused(false);
+            if (radiusInput != null) radiusInput.setFocused(false);
+            cancelPrioEdit();
+            return true;
+        }
         if (radiusInput != null && radiusInput.isVisible()
                 && radiusInput.mouseClicked(mouseX, mouseY, button)) {
             cancelPrioEdit();
             return true;
         }
 
+        // 右侧滚动条：点击轨道按比例跳转，并进入拖动状态
         int viewH = viewportHeight();
+        if (hit(mouseX, mouseY, scrollbarX(), LIST_TOP, SCROLLBAR_W, viewH)) {
+            int contentH = filtered.size() * ROW_H;
+            int maxS = Math.max(0, contentH - viewH);
+            if (maxS > 0) {
+                double ratio = (mouseY - LIST_TOP) / (double) viewH;
+                scrollY = Math.max(0, Math.min((int) Math.round(ratio * maxS), maxS));
+                scrollDragging = true;
+            }
+            return true;
+        }
+
         int first = scrollY / ROW_H;
-        int last = Math.min(entries.size(), (scrollY + viewH + ROW_H - 1) / ROW_H + 1);
-        for (int i = first; i < entries.size() && i < last; i++) {
+        int last = Math.min(filtered.size(), (scrollY + viewH + ROW_H - 1) / ROW_H + 1);
+        for (int i = first; i < filtered.size() && i < last; i++) {
             int y = LIST_TOP + i * ROW_H - scrollY;
             if (y + ROW_H < LIST_TOP || y > LIST_TOP + viewH) continue;
-            TypeEntry te = entries.get(i);
+            TypeEntry te = filtered.get(i);
             if (hit(mouseX, mouseY, 16, y, BTN_ARROW_W, BTN_ARROW_H)) {
                 cancelPrioEdit();
                 setTop(te, true);
@@ -507,14 +607,39 @@ public class SideConfigScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
         int viewH = viewportHeight();
-        int contentH = entries.size() * ROW_H;
+        int contentH = filtered.size() * ROW_H;
         int maxS = Math.max(0, contentH - viewH);
         scrollY = Math.max(0, Math.min(scrollY - (int) (verticalAmount * 20), maxS));
         return true;
     }
 
     @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (scrollDragging && button == 0) {
+            int viewH = viewportHeight();
+            int contentH = filtered.size() * ROW_H;
+            int maxS = Math.max(0, contentH - viewH);
+            if (maxS > 0) {
+                double ratio = (mouseY - LIST_TOP) / (double) viewH;
+                scrollY = Math.max(0, Math.min((int) Math.round(ratio * maxS), maxS));
+            }
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0) scrollDragging = false;
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // 搜索框聚焦时优先处理普通按键输入
+        if (searchInput != null && searchInput.isFocused()) {
+            if (searchInput.keyPressed(keyCode, scanCode, modifiers)) return true;
+        }
         // “扫描距离”输入框聚焦时优先处理
         if (radiusInput != null && radiusInput.isVisible() && radiusInput.isFocused()) {
             if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
@@ -541,6 +666,10 @@ public class SideConfigScreen extends Screen {
 
     @Override
     public boolean charTyped(char codePoint, int modifiers) {
+        if (searchInput != null && searchInput.isFocused()
+                && searchInput.charTyped(codePoint, modifiers)) {
+            return true;
+        }
         if (radiusInput != null && radiusInput.isVisible() && radiusInput.isFocused()
                 && radiusInput.charTyped(codePoint, modifiers)) {
             return true;

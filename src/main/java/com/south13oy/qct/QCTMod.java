@@ -8,6 +8,7 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig.Type;
+import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
 @Mod(QCTMod.MODID)
@@ -22,6 +23,8 @@ public class QCTMod {
         modEventBus.addListener(ModNetworking::register);
         // 注册客户端按键映射（NeoForge 21.1：MOD 总线监听统一走 IEventBus，替代已弃用的 Bus.MOD 注解）
         modEventBus.addListener(ClientSetup::onRegisterKeyMappings);
+        // 注册游戏事件：玩家登录 -> 全量下发图标
+        NeoForge.EVENT_BUS.addListener(ModNetworking::onPlayerLoggedIn);
         LOGGER.info("Quick Container Tabs loaded.");
     }
 }

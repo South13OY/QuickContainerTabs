@@ -3,6 +3,7 @@ package com.south13oy.qct.ui;
 import com.south13oy.qct.config.ModConfig;
 import com.south13oy.qct.config.SideStore;
 import com.south13oy.qct.icon.IconStore;
+import com.south13oy.qct.network.ModNetworking;
 import com.south13oy.qct.network.RequestOpenMenuPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
@@ -945,11 +946,14 @@ public class NearbyTabs {
                 : player.containerMenu.getCarried();
         // 统一语义：游标吸附有物品 → 点击替换图标；游标为空 → 点击重置图标（回到方块默认）。
         // 左键右键一致、不依赖具体按键，规避右键事件被吞导致的“重置失效”。
+        // 本地立即更新缓存（即时反馈），同时发送 C2S 请求，服务端权威存储并全服广播同步。
         if (carried.isEmpty()) {
             IconStore.setIcon(mc, mc.level.dimension(), current, ItemStack.EMPTY);
+            ModNetworking.sendIconChange(mc.level.dimension(), current, ItemStack.EMPTY);
             player.displayClientMessage(Component.literal("已重置图标"), true);
         } else {
             IconStore.setIcon(mc, mc.level.dimension(), current, carried);
+            ModNetworking.sendIconChange(mc.level.dimension(), current, carried);
         }
         return true;
     }
